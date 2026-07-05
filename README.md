@@ -30,7 +30,7 @@ npm run dev -- --hostname 0.0.0.0
 ```
 
 The second Mac should use `http://<main-mac-lan-ip>:3000` as
-`ATTENDANCE_BACKEND_URL`.
+`ATK_STORE_API_BASE_URL`.
 
 ## Worker setup
 
@@ -55,8 +55,8 @@ pip install -r requirements.txt
 Entry camera:
 
 ```txt
-ATTENDANCE_BACKEND_URL=http://127.0.0.1:3000
-ATTENDANCE_API_KEY=same-value-as-client-attendance-api-key
+ATK_STORE_API_BASE_URL=http://127.0.0.1:3000
+CLIENT_ATTENDANCE_API_KEY=same-value-as-client-attendance-api-key
 ATTENDANCE_CAMERA_ID=entry-camera-01
 ATTENDANCE_DIRECTION=entry
 ATTENDANCE_CAMERA_INDEX=0
@@ -65,11 +65,19 @@ ATTENDANCE_CAMERA_INDEX=0
 Exit camera:
 
 ```txt
-ATTENDANCE_BACKEND_URL=http://<main-mac-lan-ip>:3000
-ATTENDANCE_API_KEY=same-value-as-client-attendance-api-key
+ATK_STORE_API_BASE_URL=http://<main-mac-lan-ip>:3000
+CLIENT_ATTENDANCE_API_KEY=same-value-as-client-attendance-api-key
 ATTENDANCE_CAMERA_ID=exit-camera-01
 ATTENDANCE_DIRECTION=exit
 ATTENDANCE_CAMERA_INDEX=0
 ```
+
+In exit mode, the worker still sends the recognition frame first. When the
+backend returns a recognized visit with status `exited`, the worker calls the
+server checkout endpoint for that visit. The worker does not send payment data,
+clear carts, or calculate totals.
+
+Older env names, `ATTENDANCE_BACKEND_URL` and `ATTENDANCE_API_KEY`, are still
+accepted as fallbacks.
 
 Press `Esc` or `q` in the preview window to stop.

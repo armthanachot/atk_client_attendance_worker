@@ -15,6 +15,13 @@ import cv2
 
 
 ROOT = Path(__file__).resolve().parent
+CHECKOUT_COOLDOWN_SECONDS = 300.0
+NETWORK_ERROR_COOLDOWN_SECONDS = 30.0
+CHECKOUT_NETWORK_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+
+
+class FatalCheckoutError(RuntimeError):
+    pass
 
 
 def load_env_file(path: Path) -> None:
@@ -59,6 +66,15 @@ def read_required(name: str) -> str:
     return value
 
 
+def read_required_any(*names: str) -> str:
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    joined = " or ".join(names)
+    raise RuntimeError(f"Missing required env var: {joined}")
+
+
 @dataclass(frozen=True)
 class Config:
     backend_url: str
@@ -76,6 +92,10 @@ class Config:
     def recognize_url(self) -> str:
         return f"{self.backend_url.rstrip('/')}/api/client-attendance/recognize"
 
+    @property
+    def exit_order_url(self) -> str:
+        return f"{self.backend_url.rstrip('/')}/api/client-attendance/exit-order"
+
 
 def load_config() -> Config:
     load_env_file(ROOT / ".env")
@@ -84,8 +104,8 @@ def load_config() -> Config:
         raise RuntimeError("ATTENDANCE_DIRECTION must be entry, exit, or sighting")
 
     return Config(
-        backend_url=read_required("ATTENDANCE_BACKEND_URL"),
-        api_key=read_required("ATTENDANCE_API_KEY"),
+        backend_url=read_required_any("ATK_STORE_API_BASE_URL", "ATTENDANCE_BACKEND_URL"),
+        api_key=read_required_any("CLIENT_ATTENDANCE_API_KEY", "ATTENDANCE_API_KEY"),
         camera_id=read_required("ATTENDANCE_CAMERA_ID"),
         direction=direction,
         camera_index=read_int("ATTENDANCE_CAMERA_INDEX", 0),
@@ -164,6 +184,139 @@ def post_recognition(config: Config, jpeg_bytes: bytes) -> dict[str, Any]:
         raise RuntimeError(f"Cannot reach backend: {error}") from error
 
 
+def parse_error_body(body: str) -> tuple[str, str]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return "", body
+
+    error = str(payload.get("error") or "")
+    message = str(payload.get("message") or payload.get("detail") or body)
+    return error, message
+
+
+def post_exit_order(config: Config, client_visit_id: str) -> bool:
+    body = json.dumps({"clientVisitId": client_visit_id}).encode("utf-8")
+    request = urllib.request.Request(
+        config.exit_order_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+            "x-client-attendance-key": config.api_key,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            order = payload.get("order") or {}
+            order_id = payload.get("orderId") or order.get("id") or "-"
+            print(f"Exit checkout completed: clientVisitId={client_visit_id} orderId={order_id}")
+            return True
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        error_code, message = parse_error_body(detail)
+
+        if error.code == 402 and error_code == "insufficient_wallet_balance":
+            print(
+                "Exit checkout skipped: insufficient wallet balance "
+                f"clientVisitId={client_visit_id}",
+            )
+            return False
+
+        if error.code == 400 and "No synced cart found for this client visit" in message:
+            print(
+                "Exit checkout skipped: missing IoT/cart sync "
+                f"clientVisitId={client_visit_id}",
+            )
+            return False
+
+        if error.code == 401:
+            raise FatalCheckoutError(
+                "Exit checkout failed loudly: API key mismatch "
+                f"clientVisitId={client_visit_id}: {detail}",
+            ) from error
+
+        if error.code == 500:
+            raise FatalCheckoutError(
+                "Exit checkout failed loudly: server misconfigured "
+                f"clientVisitId={client_visit_id}: {detail}",
+            ) from error
+
+        raise RuntimeError(
+            f"Exit checkout failed: backend returned {error.code} "
+            f"clientVisitId={client_visit_id}: {detail}",
+        ) from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Exit checkout network error: {error}") from error
+
+
+def maybe_checkout_exit_order(
+    config: Config,
+    recognition: dict[str, Any],
+    completed_visit_ids: set[str],
+    attempted_visit_ids: set[str],
+    checkout_cooldowns: dict[str, float],
+) -> None:
+    if config.direction != "exit":
+        return
+
+    event = recognition.get("event") or {}
+    visit = recognition.get("visit") or {}
+    client_visit_id = str(visit.get("id") or "")
+    if (
+        event.get("decision") != "recognized"
+        or not client_visit_id
+        or visit.get("status") != "exited"
+    ):
+        return
+
+    if client_visit_id in completed_visit_ids:
+        print(f"Exit checkout skipped: already completed clientVisitId={client_visit_id}")
+        return
+
+    now = time.monotonic()
+    cooldown_until = checkout_cooldowns.get(client_visit_id, 0.0)
+    if now < cooldown_until:
+        remaining = int(cooldown_until - now)
+        print(
+            "Exit checkout skipped: visit is cooling down "
+            f"clientVisitId={client_visit_id} retryAfterSeconds={remaining}",
+        )
+        return
+
+    attempted_visit_ids.add(client_visit_id)
+
+    for attempt, backoff_seconds in enumerate(CHECKOUT_NETWORK_BACKOFF_SECONDS, start=1):
+        try:
+            if post_exit_order(config, client_visit_id):
+                completed_visit_ids.add(client_visit_id)
+            else:
+                checkout_cooldowns[client_visit_id] = (
+                    time.monotonic() + CHECKOUT_COOLDOWN_SECONDS
+                )
+            return
+        except RuntimeError as error:
+            if "network error" not in str(error).lower():
+                raise
+            if attempt == len(CHECKOUT_NETWORK_BACKOFF_SECONDS):
+                checkout_cooldowns[client_visit_id] = (
+                    time.monotonic() + NETWORK_ERROR_COOLDOWN_SECONDS
+                )
+                print(
+                    "Exit checkout network error after bounded retries; cooling down "
+                    f"clientVisitId={client_visit_id}: {error}",
+                )
+                return
+            print(
+                "Exit checkout network error; retrying "
+                f"clientVisitId={client_visit_id} attempt={attempt}: {error}",
+            )
+            time.sleep(backoff_seconds)
+
+
 def largest_face(faces: Any) -> tuple[int, int, int, int] | None:
     if len(faces) == 0:
         return None
@@ -235,6 +388,9 @@ def main() -> None:
 
     last_request_at = 0.0
     last_status = "waiting"
+    completed_visit_ids: set[str] = set()
+    attempted_visit_ids: set[str] = set()
+    checkout_cooldowns: dict[str, float] = {}
 
     try:
         while True:
@@ -265,6 +421,15 @@ def main() -> None:
                         result = post_recognition(config, jpeg_bytes)
                         last_status = format_result(result)
                         print(last_status)
+                        maybe_checkout_exit_order(
+                            config,
+                            result,
+                            completed_visit_ids,
+                            attempted_visit_ids,
+                            checkout_cooldowns,
+                        )
+                    except FatalCheckoutError:
+                        raise
                     except Exception as error:
                         last_status = f"error: {error}"
                         print(last_status)
