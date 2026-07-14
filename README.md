@@ -5,7 +5,7 @@ Python camera worker for the in-store face recognition PoC.
 The worker:
 
 - reads one local camera
-- detects the largest face locally with OpenCV
+- detects the largest face locally with OpenCV YuNet
 - estimates face distance from the detected face width
 - skips recognition when the person is outside the configured distance range
 - crops the face area
@@ -51,6 +51,24 @@ python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+## Face detector
+
+The worker uses OpenCV YuNet by default:
+
+```txt
+ATTENDANCE_FACE_DETECTOR=yunet
+ATTENDANCE_YUNET_MODEL_PATH=models/face_detection_yunet_2023mar.onnx
+ATTENDANCE_YUNET_SCORE_THRESHOLD=0.8
+ATTENDANCE_YUNET_NMS_THRESHOLD=0.3
+ATTENDANCE_YUNET_TOP_K=5000
+```
+
+The default model file is stored at
+`models/face_detection_yunet_2023mar.onnx` and comes from the official
+[OpenCV Zoo YuNet model](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
+
+Set `ATTENDANCE_FACE_DETECTOR=haar` to use the previous Haar cascade detector.
 
 ## Example configs
 

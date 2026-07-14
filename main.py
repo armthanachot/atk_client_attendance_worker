@@ -22,7 +22,7 @@ from vision import (
 
 def main() -> None:
     config = load_config()
-    detector = create_face_detector()
+    detector = create_face_detector(config.face_detector)
     capture = cv2.VideoCapture(config.camera_index)
     if not capture.isOpened():
         raise RuntimeError(f"Cannot open camera index {config.camera_index}")

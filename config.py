@@ -64,6 +64,15 @@ class DistanceConfig:
 
 
 @dataclass(frozen=True)
+class FaceDetectorConfig:
+    detector_type: str
+    yunet_model_path: Path
+    yunet_score_threshold: float
+    yunet_nms_threshold: float
+    yunet_top_k: int
+
+
+@dataclass(frozen=True)
 class Config:
     backend_url: str
     api_key: str
@@ -75,6 +84,7 @@ class Config:
     crop_padding_ratio: float
     jpeg_quality: int
     display_preview: bool
+    face_detector: FaceDetectorConfig
     distance: DistanceConfig
 
     @property
@@ -105,6 +115,19 @@ def load_config() -> Config:
             "ATTENDANCE_MIN_DISTANCE_CM must be less than ATTENDANCE_MAX_DISTANCE_CM",
         )
 
+    face_detector_type = os.environ.get("ATTENDANCE_FACE_DETECTOR", "yunet").strip()
+    if face_detector_type not in {"yunet", "haar"}:
+        raise RuntimeError("ATTENDANCE_FACE_DETECTOR must be yunet or haar")
+
+    yunet_model_path = Path(
+        os.environ.get(
+            "ATTENDANCE_YUNET_MODEL_PATH",
+            "models/face_detection_yunet_2023mar.onnx",
+        ),
+    )
+    if not yunet_model_path.is_absolute():
+        yunet_model_path = ROOT / yunet_model_path
+
     return Config(
         backend_url=read_required("ATTENDANCE_BACKEND_URL"),
         api_key=read_required("ATTENDANCE_API_KEY"),
@@ -119,5 +142,12 @@ def load_config() -> Config:
         crop_padding_ratio=read_float("ATTENDANCE_CROP_PADDING_RATIO", 0.35),
         jpeg_quality=read_int("ATTENDANCE_JPEG_QUALITY", 85),
         display_preview=read_bool("ATTENDANCE_DISPLAY_PREVIEW", True),
+        face_detector=FaceDetectorConfig(
+            detector_type=face_detector_type,
+            yunet_model_path=yunet_model_path,
+            yunet_score_threshold=read_float("ATTENDANCE_YUNET_SCORE_THRESHOLD", 0.8),
+            yunet_nms_threshold=read_float("ATTENDANCE_YUNET_NMS_THRESHOLD", 0.3),
+            yunet_top_k=read_int("ATTENDANCE_YUNET_TOP_K", 5000),
+        ),
         distance=distance,
     )

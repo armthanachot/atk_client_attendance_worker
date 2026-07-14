@@ -6,7 +6,7 @@ from typing import Any
 
 import cv2
 
-from config import DistanceConfig
+from config import DistanceConfig, FaceDetectorConfig
 
 
 FaceBox = tuple[int, int, int, int]
@@ -19,29 +19,101 @@ class DistanceCheck:
     status: str
 
 
-def create_face_detector() -> Any:
+@dataclass(frozen=True)
+class FaceDetection:
+    box: FaceBox
+    score: float | None = None
+
+
+@dataclass
+class FaceDetector:
+    detector_type: str
+    model: Any
+
+
+def create_face_detector(config: FaceDetectorConfig) -> FaceDetector:
+    if config.detector_type == "yunet":
+        if not config.yunet_model_path.exists():
+            raise RuntimeError(f"Cannot load YuNet model: {config.yunet_model_path}")
+        detector = cv2.FaceDetectorYN.create(
+            str(config.yunet_model_path),
+            "",
+            (320, 320),
+            config.yunet_score_threshold,
+            config.yunet_nms_threshold,
+            config.yunet_top_k,
+        )
+        return FaceDetector("yunet", detector)
+
     cascade_path = Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"
     detector = cv2.CascadeClassifier(str(cascade_path))
     if detector.empty():
         raise RuntimeError(f"Cannot load OpenCV face cascade: {cascade_path}")
-    return detector
+    return FaceDetector("haar", detector)
 
 
-def detect_faces(detector: Any, frame: Any, min_face_size: int) -> Any:
+def detect_faces(
+    detector: FaceDetector,
+    frame: Any,
+    min_face_size: int,
+) -> list[FaceDetection]:
+    if detector.detector_type == "yunet":
+        return detect_faces_yunet(detector.model, frame, min_face_size)
+    return detect_faces_haar(detector.model, frame, min_face_size)
+
+
+def detect_faces_haar(
+    detector: Any,
+    frame: Any,
+    min_face_size: int,
+) -> list[FaceDetection]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return detector.detectMultiScale(
+    faces = detector.detectMultiScale(
         gray,
         scaleFactor=1.1,
         minNeighbors=5,
         minSize=(min_face_size, min_face_size),
     )
+    return [
+        FaceDetection((int(x), int(y), int(w), int(h)))
+        for x, y, w, h in faces
+    ]
 
 
-def largest_face(faces: Any) -> FaceBox | None:
+def detect_faces_yunet(
+    detector: Any,
+    frame: Any,
+    min_face_size: int,
+) -> list[FaceDetection]:
+    frame_height, frame_width = frame.shape[:2]
+    detector.setInputSize((frame_width, frame_height))
+    _, faces = detector.detect(frame)
+    if faces is None:
+        return []
+
+    detections: list[FaceDetection] = []
+    for face in faces:
+        x, y, w, h = face[:4]
+        if w < min_face_size or h < min_face_size:
+            continue
+        detections.append(
+            FaceDetection(
+                (
+                    max(0, int(round(x))),
+                    max(0, int(round(y))),
+                    int(round(w)),
+                    int(round(h)),
+                ),
+                float(face[-1]),
+            ),
+        )
+    return detections
+
+
+def largest_face(faces: list[FaceDetection]) -> FaceBox | None:
     if len(faces) == 0:
         return None
-    x, y, w, h = max(faces, key=lambda face: int(face[2]) * int(face[3]))
-    return int(x), int(y), int(w), int(h)
+    return max(faces, key=lambda face: face.box[2] * face.box[3]).box
 
 
 def estimate_face_distance_cm(
