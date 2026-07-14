@@ -5,7 +5,9 @@ Python camera worker for the in-store face recognition PoC.
 The worker:
 
 - reads one local camera
-- detects the largest face locally with OpenCV
+- detects the largest face locally with OpenCV YuNet
+- estimates face distance from the detected face width
+- skips recognition when the person is outside the configured distance range
 - crops the face area
 - sends only the selected JPEG crop to the ATK Store backend
 - never indexes new faces
@@ -50,6 +52,24 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Face detector
+
+The worker uses OpenCV YuNet by default:
+
+```txt
+ATTENDANCE_FACE_DETECTOR=yunet
+ATTENDANCE_YUNET_MODEL_PATH=models/face_detection_yunet_2023mar.onnx
+ATTENDANCE_YUNET_SCORE_THRESHOLD=0.8
+ATTENDANCE_YUNET_NMS_THRESHOLD=0.3
+ATTENDANCE_YUNET_TOP_K=5000
+```
+
+The default model file is stored at
+`models/face_detection_yunet_2023mar.onnx` and comes from the official
+[OpenCV Zoo YuNet model](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet).
+
+Set `ATTENDANCE_FACE_DETECTOR=haar` to use the previous Haar cascade detector.
+
 ## Example configs
 
 Entry camera:
@@ -72,12 +92,22 @@ ATTENDANCE_DIRECTION=exit
 ATTENDANCE_CAMERA_INDEX=0
 ```
 
-In exit mode, the worker still sends the recognition frame first. When the
-backend returns a recognized visit with status `exited`, the worker calls the
-server checkout endpoint for that visit. The worker does not send payment data,
-clear carts, or calculate totals.
+## Distance gate
 
-Older env names, `ATTENDANCE_BACKEND_URL` and `ATTENDANCE_API_KEY`, are still
-accepted as fallbacks.
+The worker estimates distance with the detected face width:
+
+```txt
+distance_cm = (ATTENDANCE_FACE_KNOWN_WIDTH_CM * ATTENDANCE_CAMERA_FOCAL_LENGTH_PX) / face_width_px
+```
+
+To calibrate `ATTENDANCE_CAMERA_FOCAL_LENGTH_PX`, stand at a known distance
+from the camera and use:
+
+```txt
+focal_length_px = (face_width_px * known_distance_cm) / ATTENDANCE_FACE_KNOWN_WIDTH_CM
+```
+
+For example, if a face is 150 px wide at 60 cm and the assumed real face width
+is 15 cm, the focal length is `600`.
 
 Press `Esc` or `q` in the preview window to stop.
