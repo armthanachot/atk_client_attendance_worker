@@ -6,6 +6,8 @@ The worker:
 
 - reads one local camera
 - detects the largest face locally with OpenCV
+- estimates face distance from the detected face width
+- skips recognition when the person is outside the configured distance range
 - crops the face area
 - sends only the selected JPEG crop to the ATK Store backend
 - never indexes new faces
@@ -71,5 +73,23 @@ ATTENDANCE_CAMERA_ID=exit-camera-01
 ATTENDANCE_DIRECTION=exit
 ATTENDANCE_CAMERA_INDEX=0
 ```
+
+## Distance gate
+
+The worker estimates distance with the detected face width:
+
+```txt
+distance_cm = (ATTENDANCE_FACE_KNOWN_WIDTH_CM * ATTENDANCE_CAMERA_FOCAL_LENGTH_PX) / face_width_px
+```
+
+To calibrate `ATTENDANCE_CAMERA_FOCAL_LENGTH_PX`, stand at a known distance
+from the camera and use:
+
+```txt
+focal_length_px = (face_width_px * known_distance_cm) / ATTENDANCE_FACE_KNOWN_WIDTH_CM
+```
+
+For example, if a face is 150 px wide at 60 cm and the assumed real face width
+is 15 cm, the focal length is `600`.
 
 Press `Esc` or `q` in the preview window to stop.
