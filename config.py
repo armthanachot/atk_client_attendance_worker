@@ -67,6 +67,21 @@ def validate_liveness_config(config: "LivenessConfig") -> None:
         raise RuntimeError("ATTENDANCE_LIVENESS_INPUT_WIDTH/HEIGHT must be positive")
     if not config.torch_device:
         raise RuntimeError("ATTENDANCE_LIVENESS_TORCH_DEVICE cannot be empty")
+    if config.live_class_index != 1:
+        raise RuntimeError(
+            "MiniFASNet real-face class is 1; "
+            "ATTENDANCE_LIVENESS_LIVE_CLASS_INDEX must be 1",
+        )
+    if config.track_max_gap_seconds <= 0:
+        raise RuntimeError("ATTENDANCE_LIVENESS_TRACK_MAX_GAP_SECONDS must be positive")
+    if not 0.0 <= config.screen_risk_threshold <= 1.0:
+        raise RuntimeError(
+            "ATTENDANCE_LIVENESS_SCREEN_RISK_THRESHOLD must be between 0 and 1",
+        )
+    if config.motion_min_observations < 1:
+        raise RuntimeError(
+            "ATTENDANCE_LIVENESS_MOTION_MIN_OBSERVATIONS must be at least 1",
+        )
 
 
 @dataclass(frozen=True)
@@ -103,6 +118,7 @@ class LivenessConfig:
     crop_padding_ratio: float
     screen_check_enabled: bool
     model_path: Path
+    v1se_model_path: Path
     model_proto_path: Path | None
     input_width: int
     input_height: int
@@ -113,6 +129,10 @@ class LivenessConfig:
     swap_rb: bool
     live_class_index: int
     torch_device: str
+    track_max_gap_seconds: float
+    screen_risk_threshold: float
+    motion_check_enabled: bool
+    motion_min_observations: int
 
     @property
     def input_size(self) -> tuple[int, int]:
@@ -126,6 +146,9 @@ class Config:
     camera_id: str
     direction: str
     camera_index: int
+    camera_width: int
+    camera_height: int
+    camera_fps: int
     request_interval_seconds: float
     min_face_size: int
     crop_padding_ratio: float
@@ -185,6 +208,15 @@ def load_config() -> Config:
     if not liveness_model_path.is_absolute():
         liveness_model_path = ROOT / liveness_model_path
 
+    liveness_v1se_model_path = Path(
+        os.environ.get(
+            "ATTENDANCE_LIVENESS_V1SE_MODEL_PATH",
+            "models/4_0_0_80x80_MiniFASNetV1SE.pth",
+        ),
+    )
+    if not liveness_v1se_model_path.is_absolute():
+        liveness_v1se_model_path = ROOT / liveness_v1se_model_path
+
     raw_liveness_proto_path = os.environ.get("ATTENDANCE_LIVENESS_MODEL_PROTO_PATH")
     liveness_model_proto_path: Path | None = None
     if raw_liveness_proto_path:
@@ -212,6 +244,7 @@ def load_config() -> Config:
         crop_padding_ratio=read_float("ATTENDANCE_LIVENESS_CROP_PADDING_RATIO", 0.85),
         screen_check_enabled=read_bool("ATTENDANCE_LIVENESS_SCREEN_CHECK_ENABLED", True),
         model_path=liveness_model_path,
+        v1se_model_path=liveness_v1se_model_path,
         model_proto_path=liveness_model_proto_path,
         input_width=read_int("ATTENDANCE_LIVENESS_INPUT_WIDTH", 80),
         input_height=read_int("ATTENDANCE_LIVENESS_INPUT_HEIGHT", 80),
@@ -222,8 +255,32 @@ def load_config() -> Config:
         swap_rb=read_bool("ATTENDANCE_LIVENESS_SWAP_RB", True),
         live_class_index=read_int("ATTENDANCE_LIVENESS_LIVE_CLASS_INDEX", 1),
         torch_device=os.environ.get("ATTENDANCE_LIVENESS_TORCH_DEVICE", "auto").strip(),
+        track_max_gap_seconds=read_float(
+            "ATTENDANCE_LIVENESS_TRACK_MAX_GAP_SECONDS",
+            0.75,
+        ),
+        screen_risk_threshold=read_float(
+            "ATTENDANCE_LIVENESS_SCREEN_RISK_THRESHOLD",
+            0.62,
+        ),
+        motion_check_enabled=read_bool(
+            "ATTENDANCE_LIVENESS_MOTION_CHECK_ENABLED",
+            True,
+        ),
+        motion_min_observations=read_int(
+            "ATTENDANCE_LIVENESS_MOTION_MIN_OBSERVATIONS",
+            4,
+        ),
     )
     validate_liveness_config(liveness)
+
+    camera_width = read_int("ATTENDANCE_CAMERA_WIDTH", 1920)
+    camera_height = read_int("ATTENDANCE_CAMERA_HEIGHT", 1080)
+    camera_fps = read_int("ATTENDANCE_CAMERA_FPS", 30)
+    if camera_width < 1 or camera_height < 1 or camera_fps < 1:
+        raise RuntimeError(
+            "ATTENDANCE_CAMERA_WIDTH/HEIGHT/FPS must all be positive",
+        )
 
     return Config(
         backend_url=read_required("ATTENDANCE_BACKEND_URL"),
@@ -231,6 +288,9 @@ def load_config() -> Config:
         camera_id=read_required("ATTENDANCE_CAMERA_ID"),
         direction=direction,
         camera_index=read_int("ATTENDANCE_CAMERA_INDEX", 0),
+        camera_width=camera_width,
+        camera_height=camera_height,
+        camera_fps=camera_fps,
         request_interval_seconds=read_float(
             "ATTENDANCE_REQUEST_INTERVAL_SECONDS",
             3.0,

@@ -7,7 +7,12 @@ The worker:
 - reads one local camera
 - detects the largest face locally with OpenCV YuNet
 - estimates face distance from the detected face width
-- optionally runs passive face liveness before recognition
+- runs MiniFASNetV2 + MiniFASNetV1SE as an ensemble
+- keeps liveness evidence on a continuous person track instead of a frame median
+- checks the full frame for display boundaries and the face area for moire,
+  refresh banding/flicker, glare, and display color/contrast
+- checks optical-flow parallax and rejects motion that fits one flat homography
+- fuses the model, screen, and motion signals and fails closed when uncertain
 - skips recognition when the person is outside the configured distance range
 - crops the face area
 - sends only the selected JPEG crop to the ATK Store backend
@@ -115,10 +120,9 @@ Press `Esc` or `q` in the preview window to stop.
 
 ## Passive liveness precheck
 
-The worker can run a passive RGB liveness model before sending a recognition
-request. Download the official MiniFASNetV2 checkpoint from
-`minivision-ai/Silent-Face-Anti-Spoofing` and place it at
-`models/2.7_80x80_MiniFASNetV2.pth`.
+The worker runs two official checkpoints before sending a recognition request.
+Place MiniFASNetV2 at `models/MiniFASNetV2.pth` and MiniFASNetV1SE at
+`models/4_0_0_80x80_MiniFASNetV1SE.pth`.
 
 Official model:
 
@@ -134,13 +138,19 @@ Recommended starting point for the MacBook camera:
 ```txt
 ATTENDANCE_MAX_DISTANCE_CM=90.0
 ATTENDANCE_LIVENESS_ENABLED=true
-ATTENDANCE_LIVENESS_MODEL_PATH=models/2.7_80x80_MiniFASNetV2.pth
+ATTENDANCE_LIVENESS_MODEL_PATH=models/MiniFASNetV2.pth
+ATTENDANCE_LIVENESS_V1SE_MODEL_PATH=models/4_0_0_80x80_MiniFASNetV1SE.pth
 ATTENDANCE_LIVENESS_PRECHECK_ENABLED=true
 ATTENDANCE_LIVENESS_PRECHECK_EXTRA_CM=50
 ATTENDANCE_LIVENESS_PASS_TTL_SECONDS=3
 ATTENDANCE_LIVENESS_MIN_FRAMES=12
 ATTENDANCE_LIVENESS_THRESHOLD=0.50
 ATTENDANCE_LIVENESS_CROP_PADDING_RATIO=0.85
+ATTENDANCE_LIVENESS_LIVE_CLASS_INDEX=1
+ATTENDANCE_LIVENESS_TRACK_MAX_GAP_SECONDS=0.75
+ATTENDANCE_LIVENESS_SCREEN_RISK_THRESHOLD=0.62
+ATTENDANCE_LIVENESS_MOTION_CHECK_ENABLED=true
+ATTENDANCE_LIVENESS_MOTION_MIN_OBSERVATIONS=4
 ```
 
 With these values, `40-90 cm` is the verify zone and `90-140 cm` is the
@@ -150,3 +160,9 @@ JPEG crop to the backend.
 Start with `ATTENDANCE_LIVENESS_THRESHOLD=0.50` to inspect real-face and spoof
 scores from the actual camera setup. Raise it only after real faces pass
 consistently under the store lighting.
+
+An uncertain track never calls the attendance API. The preview/log asks the
+person to walk through again and records signal scores plus reason codes. This
+is still passive RGB PAD: it materially raises the bar for phone replay but
+cannot provide the same assurance as depth/NIR hardware. Calibrate thresholds
+with real users and the actual store lighting before production use.

@@ -10,6 +10,7 @@ from config import DistanceConfig, FaceDetectorConfig
 
 
 FaceBox = tuple[int, int, int, int]
+FaceLandmarks = tuple[tuple[float, float], ...]
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class DistanceCheck:
 class FaceDetection:
     box: FaceBox
     score: float | None = None
+    landmarks: FaceLandmarks = ()
 
 
 @dataclass
@@ -105,6 +107,10 @@ def detect_faces_yunet(
                     int(round(h)),
                 ),
                 float(face[-1]),
+                tuple(
+                    (float(face[index]), float(face[index + 1]))
+                    for index in range(4, 14, 2)
+                ),
             ),
         )
     return detections
@@ -114,6 +120,12 @@ def largest_face(faces: list[FaceDetection]) -> FaceBox | None:
     if len(faces) == 0:
         return None
     return max(faces, key=lambda face: face.box[2] * face.box[3]).box
+
+
+def largest_detection(faces: list[FaceDetection]) -> FaceDetection | None:
+    if len(faces) == 0:
+        return None
+    return max(faces, key=lambda face: face.box[2] * face.box[3])
 
 
 def estimate_face_distance_cm(

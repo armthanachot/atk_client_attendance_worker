@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-18T11:59:08Z","task_id":"rgb-passive-liveness-hardening","test_file":"tests/test_liveness.py","exit_code":1,"framework":"unittest","stderr_tail":"ImportError: SignalFusion not implemented","cwd_hash":"30d482b43a3a"}
