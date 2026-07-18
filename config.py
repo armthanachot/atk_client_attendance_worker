@@ -50,6 +50,25 @@ def read_required(name: str) -> str:
     return value
 
 
+def validate_liveness_config(config: "LivenessConfig") -> None:
+    if not 0.0 <= config.threshold <= 1.0:
+        raise RuntimeError("ATTENDANCE_LIVENESS_THRESHOLD must be between 0 and 1")
+    if config.min_frames < 1:
+        raise RuntimeError("ATTENDANCE_LIVENESS_MIN_FRAMES must be at least 1")
+    if config.pass_ttl_seconds <= 0:
+        raise RuntimeError("ATTENDANCE_LIVENESS_PASS_TTL_SECONDS must be positive")
+    if config.precheck_extra_cm < 0:
+        raise RuntimeError("ATTENDANCE_LIVENESS_PRECHECK_EXTRA_CM cannot be negative")
+    if config.min_face_size < 1:
+        raise RuntimeError("ATTENDANCE_LIVENESS_MIN_FACE_SIZE must be positive")
+    if config.crop_padding_ratio < 0:
+        raise RuntimeError("ATTENDANCE_LIVENESS_CROP_PADDING_RATIO cannot be negative")
+    if config.input_width < 1 or config.input_height < 1:
+        raise RuntimeError("ATTENDANCE_LIVENESS_INPUT_WIDTH/HEIGHT must be positive")
+    if not config.torch_device:
+        raise RuntimeError("ATTENDANCE_LIVENESS_TORCH_DEVICE cannot be empty")
+
+
 @dataclass(frozen=True)
 class DistanceConfig:
     gate_enabled: bool
@@ -73,6 +92,34 @@ class FaceDetectorConfig:
 
 
 @dataclass(frozen=True)
+class LivenessConfig:
+    enabled: bool
+    precheck_enabled: bool
+    precheck_extra_cm: float
+    pass_ttl_seconds: float
+    min_frames: int
+    threshold: float
+    min_face_size: int
+    crop_padding_ratio: float
+    screen_check_enabled: bool
+    model_path: Path
+    model_proto_path: Path | None
+    input_width: int
+    input_height: int
+    scale: float
+    mean_b: float
+    mean_g: float
+    mean_r: float
+    swap_rb: bool
+    live_class_index: int
+    torch_device: str
+
+    @property
+    def input_size(self) -> tuple[int, int]:
+        return (self.input_width, self.input_height)
+
+
+@dataclass(frozen=True)
 class Config:
     backend_url: str
     api_key: str
@@ -86,6 +133,7 @@ class Config:
     display_preview: bool
     face_detector: FaceDetectorConfig
     distance: DistanceConfig
+    liveness: LivenessConfig
 
     @property
     def recognize_url(self) -> str:
@@ -128,6 +176,55 @@ def load_config() -> Config:
     if not yunet_model_path.is_absolute():
         yunet_model_path = ROOT / yunet_model_path
 
+    liveness_model_path = Path(
+        os.environ.get(
+            "ATTENDANCE_LIVENESS_MODEL_PATH",
+            "models/2.7_80x80_MiniFASNetV2.pth",
+        ),
+    )
+    if not liveness_model_path.is_absolute():
+        liveness_model_path = ROOT / liveness_model_path
+
+    raw_liveness_proto_path = os.environ.get("ATTENDANCE_LIVENESS_MODEL_PROTO_PATH")
+    liveness_model_proto_path: Path | None = None
+    if raw_liveness_proto_path:
+        liveness_model_proto_path = Path(raw_liveness_proto_path)
+        if not liveness_model_proto_path.is_absolute():
+            liveness_model_proto_path = ROOT / liveness_model_proto_path
+
+    liveness = LivenessConfig(
+        enabled=read_bool("ATTENDANCE_LIVENESS_ENABLED", False),
+        precheck_enabled=read_bool("ATTENDANCE_LIVENESS_PRECHECK_ENABLED", True),
+        precheck_extra_cm=read_float(
+            "ATTENDANCE_LIVENESS_PRECHECK_EXTRA_CM",
+            50.0,
+        ),
+        pass_ttl_seconds=read_float(
+            "ATTENDANCE_LIVENESS_PASS_TTL_SECONDS",
+            3.0,
+        ),
+        min_frames=read_int("ATTENDANCE_LIVENESS_MIN_FRAMES", 12),
+        threshold=read_float("ATTENDANCE_LIVENESS_THRESHOLD", 0.85),
+        min_face_size=read_int(
+            "ATTENDANCE_LIVENESS_MIN_FACE_SIZE",
+            read_int("ATTENDANCE_MIN_FACE_SIZE", 90),
+        ),
+        crop_padding_ratio=read_float("ATTENDANCE_LIVENESS_CROP_PADDING_RATIO", 0.85),
+        screen_check_enabled=read_bool("ATTENDANCE_LIVENESS_SCREEN_CHECK_ENABLED", True),
+        model_path=liveness_model_path,
+        model_proto_path=liveness_model_proto_path,
+        input_width=read_int("ATTENDANCE_LIVENESS_INPUT_WIDTH", 80),
+        input_height=read_int("ATTENDANCE_LIVENESS_INPUT_HEIGHT", 80),
+        scale=read_float("ATTENDANCE_LIVENESS_SCALE", 1.0 / 255.0),
+        mean_b=read_float("ATTENDANCE_LIVENESS_MEAN_B", 0.0),
+        mean_g=read_float("ATTENDANCE_LIVENESS_MEAN_G", 0.0),
+        mean_r=read_float("ATTENDANCE_LIVENESS_MEAN_R", 0.0),
+        swap_rb=read_bool("ATTENDANCE_LIVENESS_SWAP_RB", True),
+        live_class_index=read_int("ATTENDANCE_LIVENESS_LIVE_CLASS_INDEX", 1),
+        torch_device=os.environ.get("ATTENDANCE_LIVENESS_TORCH_DEVICE", "auto").strip(),
+    )
+    validate_liveness_config(liveness)
+
     return Config(
         backend_url=read_required("ATTENDANCE_BACKEND_URL"),
         api_key=read_required("ATTENDANCE_API_KEY"),
@@ -150,4 +247,5 @@ def load_config() -> Config:
             yunet_top_k=read_int("ATTENDANCE_YUNET_TOP_K", 5000),
         ),
         distance=distance,
+        liveness=liveness,
     )
