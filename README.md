@@ -7,6 +7,7 @@ The worker:
 - reads one local camera
 - detects the largest face locally with OpenCV YuNet
 - estimates face distance from the detected face width
+- optionally runs passive face liveness before recognition
 - skips recognition when the person is outside the configured distance range
 - crops the face area
 - sends only the selected JPEG crop to the ATK Store backend
@@ -111,3 +112,41 @@ For example, if a face is 150 px wide at 60 cm and the assumed real face width
 is 15 cm, the focal length is `600`.
 
 Press `Esc` or `q` in the preview window to stop.
+
+## Passive liveness precheck
+
+The worker can run a passive RGB liveness model before sending a recognition
+request. Download the official MiniFASNetV2 checkpoint from
+`minivision-ai/Silent-Face-Anti-Spoofing` and place it at
+`models/2.7_80x80_MiniFASNetV2.pth`.
+
+Official model:
+
+```txt
+https://github.com/minivision-ai/Silent-Face-Anti-Spoofing/raw/refs/heads/master/resources/anti_spoof_models/2.7_80x80_MiniFASNetV2.pth
+```
+
+`.pth` models use PyTorch. OpenCV DNN-compatible `.onnx` and `.caffemodel`
+files can still be used by pointing `ATTENDANCE_LIVENESS_MODEL_PATH` at them.
+
+Recommended starting point for the MacBook camera:
+
+```txt
+ATTENDANCE_MAX_DISTANCE_CM=90.0
+ATTENDANCE_LIVENESS_ENABLED=true
+ATTENDANCE_LIVENESS_MODEL_PATH=models/2.7_80x80_MiniFASNetV2.pth
+ATTENDANCE_LIVENESS_PRECHECK_ENABLED=true
+ATTENDANCE_LIVENESS_PRECHECK_EXTRA_CM=50
+ATTENDANCE_LIVENESS_PASS_TTL_SECONDS=3
+ATTENDANCE_LIVENESS_MIN_FRAMES=12
+ATTENDANCE_LIVENESS_THRESHOLD=0.50
+ATTENDANCE_LIVENESS_CROP_PADDING_RATIO=0.85
+```
+
+With these values, `40-90 cm` is the verify zone and `90-140 cm` is the
+pre-liveness zone. Liveness must pass within the TTL before the worker sends the
+JPEG crop to the backend.
+
+Start with `ATTENDANCE_LIVENESS_THRESHOLD=0.50` to inspect real-face and spoof
+scores from the actual camera setup. Raise it only after real faces pass
+consistently under the store lighting.

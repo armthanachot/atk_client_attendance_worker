@@ -36,3 +36,4 @@ dist/
 *.jpg
 *.jpeg
 *.png
+models/*.pth
